@@ -41,7 +41,7 @@ async def activate_user(db: AsyncSession, email: str, token: str):
     )
     user = result.unique().scalar_one_or_none()
     if not user:
-        raise BaseSecurityError("User not found.")
+        raise BaseSecurityError("Invalid or expired activation token.")
 
     if user.is_active:
         raise BaseSecurityError("User account is already active.")

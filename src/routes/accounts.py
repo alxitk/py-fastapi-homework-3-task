@@ -192,19 +192,17 @@ async def refresh_token(
     db: AsyncSession = Depends(get_db),
     jwt_manager: JWTAuthManager = Depends(get_jwt_auth_manager),
 ):
-    # ✅ Сначала проверяем валидность токена (включая срок действия)
     try:
         payload = jwt_manager.decode_refresh_token(data.refresh_token)
     except TokenExpiredError:
         raise HTTPException(status_code=400, detail="Token has expired.")
     except InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid refresh token.")
+        raise HTTPException(status_code=400, detail="Invalid refresh token.")
 
     user_id = payload.get("user_id")
     if not user_id:
         raise HTTPException(status_code=400, detail="Invalid token payload.")
 
-    # ✅ Потом проверяем, есть ли токен в БД
     result = await db.execute(
         select(RefreshTokenModel).where(RefreshTokenModel.token == data.refresh_token)
     )
@@ -212,13 +210,11 @@ async def refresh_token(
     if not token_record:
         raise HTTPException(status_code=401, detail="Refresh token not found.")
 
-    # ✅ Проверяем существование пользователя
     result_user = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = result_user.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    # ✅ Создаём новый access token
     access_token = jwt_manager.create_access_token({"user_id": user.id})
 
     return {"access_token": access_token, "token_type": "bearer"}
