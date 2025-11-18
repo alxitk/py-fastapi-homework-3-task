@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 from fastapi.security import OAuth2PasswordBearer
 
+from config import get_jwt_auth_manager
 from crud.user import get_user_by_email, create_user, activate_user
 from database import (
     get_db,
@@ -16,8 +17,9 @@ from database import (
 )
 from exceptions import BaseSecurityError, TokenExpiredError, InvalidTokenError
 from schemas import UserRegistrationRequestSchema, UserRegistrationResponseSchema, MessageResponseSchema, \
-    UserActivationRequestSchema, PasswordResetCompleteRequestSchema, PasswordResetRequestSchema, \
+    UserActivationRequestSchema, PasswordResetRequestSchema, \
     UserLoginResponseSchema, UserLoginRequestSchema, TokenRefreshResponseSchema, TokenRefreshRequestSchema
+from schemas.accounts import PasswordResetCompleteSchema
 
 from security.token_manager import JWTAuthManager
 
@@ -66,14 +68,9 @@ async def activate_account(
 
 @router.post("/password-reset/request/", response_model=MessageResponseSchema)
 async def reset_password_request(
-    data: PasswordResetCompleteRequestSchema,
+    data: PasswordResetCompleteSchema,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Request a password reset token.
-    Returns generic message for security (prevents email enumeration).
-    Token is only created for active users.
-    """
     try:
         result = await db.execute(
             select(UserModel)
@@ -84,16 +81,13 @@ async def reset_password_request(
 
         message = "If you are registered, you will receive an email with instructions."
 
-        # Токен создаётся только для существующих И активных пользователей
         if not user or not user.is_active:
             return {"message": message}
 
-        # Удаляем старый токен
         if user.password_reset_token:
             await db.delete(user.password_reset_token)
             await db.flush()
 
-        # Создаём новый токен
         reset_token = PasswordResetTokenModel(user_id=user.id)
         db.add(reset_token)
         await db.commit()
@@ -106,15 +100,12 @@ async def reset_password_request(
             detail="An error occurred while processing the request."
         )
 
+
 @router.post("/reset-password/complete/", response_model=MessageResponseSchema)
 async def reset_password_complete(
     data: PasswordResetRequestSchema,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Complete password reset using token.
-    Validates token, updates password, and removes the token.
-    """
     try:
         result = await db.execute(
             select(UserModel)
@@ -129,22 +120,16 @@ async def reset_password_complete(
         token_record = user.password_reset_token
         token_value = data.token.strip()
 
-        # Обработка timezone
         expires_at = token_record.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
 
-        # Проверка токена и срока действия
         if token_record.token != token_value or expires_at < datetime.now(timezone.utc):
-            # Удаляем невалидный/истёкший токен
             await db.delete(token_record)
             await db.commit()
             raise HTTPException(status_code=400, detail="Invalid email or token.")
 
-        # Устанавливаем новый пароль (через setter для валидации и хеширования)
         user.password = data.password
-
-        # Удаляем использованный токен
         await db.delete(token_record)
         await db.commit()
 
@@ -163,7 +148,7 @@ async def reset_password_complete(
 async def login(
     data: UserLoginRequestSchema,
     db: AsyncSession = Depends(get_db),
-    jwt_manager: JWTAuthManager = Depends(),
+    jwt_manager: JWTAuthManager = Depends(get_jwt_auth_manager),
 ):
     try:
         result = await db.execute(select(UserModel).where(UserModel.email == data.email))
@@ -184,13 +169,7 @@ async def login(
             token=refresh_token
         )
         db.add(refresh_token_record)
-        try:
-            await db.commit()
-        except SQLAlchemyError:
-            raise HTTPException(
-                status_code=500,
-                detail="An error occurred while processing the request."
-            )
+        await db.commit()
 
         return {
             "access_token": access_token,
@@ -200,21 +179,20 @@ async def login(
 
     except HTTPException:
         raise
+    except SQLAlchemyError:
+        raise HTTPException(
+            status_code=500,
+            detail="An error occurred while processing the request."
+        )
 
 
 @router.post("/refresh/", response_model=TokenRefreshResponseSchema)
 async def refresh_token(
     data: TokenRefreshRequestSchema,
     db: AsyncSession = Depends(get_db),
-    jwt_manager: JWTAuthManager = Depends(),
+    jwt_manager: JWTAuthManager = Depends(get_jwt_auth_manager),
 ):
-    result = await db.execute(
-        select(RefreshTokenModel).where(RefreshTokenModel.token == data.refresh_token)
-    )
-    token_record = result.scalars().first()
-    if not token_record:
-        raise HTTPException(status_code=401, detail="Refresh token not found.")
-
+    # ✅ Сначала проверяем валидность токена (включая срок действия)
     try:
         payload = jwt_manager.decode_refresh_token(data.refresh_token)
     except TokenExpiredError:
@@ -226,12 +204,21 @@ async def refresh_token(
     if not user_id:
         raise HTTPException(status_code=400, detail="Invalid token payload.")
 
+    # ✅ Потом проверяем, есть ли токен в БД
+    result = await db.execute(
+        select(RefreshTokenModel).where(RefreshTokenModel.token == data.refresh_token)
+    )
+    token_record = result.scalars().first()
+    if not token_record:
+        raise HTTPException(status_code=401, detail="Refresh token not found.")
+
+    # ✅ Проверяем существование пользователя
     result_user = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = result_user.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    # 4. Создаём новый access token
+    # ✅ Создаём новый access token
     access_token = jwt_manager.create_access_token({"user_id": user.id})
 
     return {"access_token": access_token, "token_type": "bearer"}

@@ -25,24 +25,20 @@ class UserRegistrationRequestSchema(BaseModel):
 
 
 class UserRegistrationResponseSchema(BaseModel):
-    """Схема ответа после регистрации"""
     id: int
     email: EmailStr
 
 
 class UserActivationRequestSchema(BaseModel):
-    """Схема для активации аккаунта"""
     email: EmailStr
     token: str
 
 
 class MessageResponseSchema(BaseModel):
-    """Общая схема для ответов с сообщением"""
     message: str
 
 
 class PasswordResetRequestSchema(BaseModel):
-    """Схема для завершения сброса пароля (используется в /reset-password/complete/)"""
     email: EmailStr
     token: str
     password: str
@@ -63,30 +59,29 @@ class PasswordResetRequestSchema(BaseModel):
         return value
 
 
-class PasswordResetCompleteRequestSchema(BaseModel):
-    """Схема для запроса токена сброса пароля (используется в /password-reset/request/)"""
+class PasswordResetCompleteSchema(BaseModel):
     email: EmailStr
 
 
+
+PasswordResetCompleteRequestSchema = PasswordResetCompleteSchema
+
+
 class UserLoginRequestSchema(BaseModel):
-    """Схема для входа пользователя"""
     email: EmailStr
     password: str
 
 
 class UserLoginResponseSchema(BaseModel):
-    """Схема ответа после входа"""
     access_token: str
     refresh_token: str
     token_type: str = "bearer"
 
 
 class TokenRefreshRequestSchema(BaseModel):
-    """Схема для обновления access token"""
     refresh_token: str
 
 
 class TokenRefreshResponseSchema(BaseModel):
-    """Схема ответа с новым access token"""
     access_token: str
     token_type: str = "bearer"
