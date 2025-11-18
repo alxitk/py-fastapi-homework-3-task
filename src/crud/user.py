@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio.session import AsyncSession
 from sqlalchemy import select
 
 from database import UserModel, ActivationTokenModel
+from exceptions import BaseSecurityError
 from schemas import UserRegistrationRequestSchema
 from security.passwords import hash_password
 import secrets
@@ -33,35 +34,38 @@ async def get_user_by_email(db: AsyncSession, email: str):
 
 
 async def activate_user(db: AsyncSession, email: str, token: str):
-
     result = await db.execute(
         select(UserModel)
         .options(joinedload(UserModel.activation_token))
         .where(UserModel.email == email)
     )
     user = result.unique().scalar_one_or_none()
-
     if not user:
-        raise HTTPException(404, "User not found.")
+        raise BaseSecurityError("User not found.")
 
     if user.is_active:
-        raise HTTPException(400, "User account is already active.")
+        raise BaseSecurityError("User account is already active.")
 
-    if not user.activation_token:
-        raise HTTPException(400, "No activation token found.")  # ✓
+    activation = user.activation_token
+    if not activation:
+        raise BaseSecurityError("Invalid or expired activation token.")
 
     token = token.strip()
 
-    if user.activation_token.token != token:
-        raise HTTPException(400, "Invalid activation token.")  # ✓
+    if activation.token != token:
+        raise BaseSecurityError("Invalid or expired activation token.")
 
-    if user.activation_token.expires_at < datetime.now(timezone.utc):
-        raise HTTPException(400, "Activation token has expired.")  # ✓
+    now = datetime.now(timezone.utc)
+    expires_at = activation.expires_at
+
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at < now:
+        raise BaseSecurityError("Invalid or expired activation token.")
 
     user.is_active = True
-
-    await db.delete(user.activation_token)
-
+    await db.delete(activation)
     await db.commit()
     await db.refresh(user)
 
