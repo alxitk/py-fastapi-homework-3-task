@@ -63,7 +63,6 @@ class PasswordResetCompleteSchema(BaseModel):
     email: EmailStr
 
 
-
 PasswordResetCompleteRequestSchema = PasswordResetCompleteSchema
 
 
